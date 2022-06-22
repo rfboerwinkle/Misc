@@ -5,20 +5,40 @@ import datetime
 
 print("q: quit, y: yes, n: no, r: yes recursively for all subdirectories/files, d: yes in this directory")
 
-# Begin FAT compatibility settings:
+META_SENSITIVE = False
+NAME_SENSITIVE = True
+TIME_SENSITIVE = False
+TIME_MARGIN = 2 # FAT doesn't support the same time precision
 
-# FAT doesn't support the same time precision
-TIME_MARGIN = 2
+if META_SENSITIVE:
+	print("Copying meta data")
+	COPY = shutil.copy2
+else:
+	print("Not copying meta data")
+	def COPY(src, dst):
+		try:
+			shutil.copy(src, dst)
+		except OSError as E:
+			print(E)
+			print("(This might not actually be a problem... Might wanna go check though)")
 
-# "/" is also forbidden, but it's forbidden in UNIX as well, and is used as a path seperator
-TOXIC_CHARS = {"\"", "*", ":", "<", ">", "?", "\\", "|"}
+if NAME_SENSITIVE:
+	print("Removing toxic characters")
+	# "/" is also forbidden, but it's forbidden in UNIX as well, and is used as a path seperator
+	TOXIC_CHARS = {"\"", "*", ":", "<", ">", "?", "\\", "|"}
 
-# To remove the name detoxing, just uncomment the "return name" line and comment out the previous "return" line
-def detox(name):
-	return "".join(("_" if x in TOXIC_CHARS else x) for x in name)
-#	return name
+	# To remove the name detoxing, just uncomment the "return name" line and comment out the previous "return" line
+	def detox(name):
+		return "".join(("_" if x in TOXIC_CHARS else x) for x in name)
+else:
+	print("Not removing toxic characters")
+	def detox(name):
+		return name
 
-# End FAT compatibility settings
+if TIME_SENSITIVE:
+	print(f"Looking at timestamps ({TIME_MARGIN}ms margins)")
+else:
+	print("Not looking at timestamps")
 
 def decide(prompt, default=None, choices=["y","n"]):
 	if default:
@@ -102,6 +122,7 @@ def syncDirectory(path):
 
 	toSearch = sourceSubdirs & destSubdirs
 
+	# extra files
 	goAhead = False
 	for file in destFiles-sourceFiles:
 		absFile = os.path.join(DEST, file)
@@ -121,69 +142,72 @@ def syncDirectory(path):
 		else:
 			EXTRA.append(file)
 
+	# missing
 	goAhead = False
 	for file in sourceFiles-destFiles:
 		absSourceFile = detoxMap[file]
 		absDestFile = os.path.join(DEST, file)
 		if goAhead:
 			print(f"Adding: \"{file}\"")
-			shutil.copy2(absSourceFile, absDestFile)
+			COPY(absSourceFile, absDestFile)
 			continue
 		print(f"Missing file not found in destination: \"{file}\"")
 		decision = decide("Add it?", choices=["y", "n", "d"])
 		if decision == "y":
-			shutil.copy2(absSourceFile, absDestFile)
+			COPY(absSourceFile, absDestFile)
 			print("Added")
 		elif decision == "d":
 			goAhead = True
 			print(f"Adding: \"{file}\"")
-			shutil.copy2(absSourceFile, absDestFile)
+			COPY(absSourceFile, absDestFile)
 		else:
 			MISSING.append(file)
 
-	outdatedGoAhead = False
-	indatedGoAhead = False
-	for file in sourceFiles&destFiles:
-		absSourceFile = detoxMap[file]
-		absDestFile = os.path.join(DEST, file)
-		sourceTime = os.stat(absSourceFile).st_mtime
-		destTime = os.stat(absDestFile).st_mtime
-		if abs(sourceTime-destTime) > TIME_MARGIN:
-			prettySourceTime = datetime.datetime.fromtimestamp(sourceTime).strftime('%Y-%m-%d %H:%M:%S')
-			prettyDestTime = datetime.datetime.fromtimestamp(destTime).strftime('%Y-%m-%d %H:%M:%S')
+	# timing
+	if TIME_SENSITIVE:
+		outdatedGoAhead = False
+		indatedGoAhead = False
+		for file in sourceFiles&destFiles:
+			absSourceFile = detoxMap[file]
+			absDestFile = os.path.join(DEST, file)
+			sourceTime = os.stat(absSourceFile).st_mtime
+			destTime = os.stat(absDestFile).st_mtime
+			if abs(sourceTime-destTime) > TIME_MARGIN:
+				prettySourceTime = datetime.datetime.fromtimestamp(sourceTime).strftime('%Y-%m-%d %H:%M:%S')
+				prettyDestTime = datetime.datetime.fromtimestamp(destTime).strftime('%Y-%m-%d %H:%M:%S')
 
-			if sourceTime > destTime:
-				if outdatedGoAhead:
-					print(f"Updating: \"{file}\"")
-					shutil.copy2(absSourceFile, absDestFile)
-					continue
-				print(f"Outdated file found in destination (source: {prettySourceTime}, destination: {prettyDestTime}): \"{file}\"")
-				decision = decide("Update it?", choices=["y", "n", "d"])
-				if decision == "y":
-					shutil.copy2(absSourceFile, absDestFile)
-					print("Updated")
-				elif decision == "d":
-					outdatedGoAhead = True
-					print(f"Updating: \"{file}\"")
-					shutil.copy2(absSourceFile, absDestFile)
-				else:
-					OUTDATED.append(file)
-			elif sourceTime < destTime:
-				if indatedGoAhead:
-					print(f"Downdating: \"{file}\"")
-					shutil.copy2(absSourceFile, absDestFile)
-					continue
-				print(f"Indated file found in destination (source: {prettySourceTime}, destination: {prettyDestTime}): \"{file}\"")
-				decision = decide("Downdate it anyway?", choices=["y", "n", "d"])
-				if decision == "y":
-					shutil.copy2(absSourceFile, absDestFile)
-					print("Downdated")
-				elif decision == "d":
-					indatedGoAhead = True
-					print(f"Downdating: \"{file}\"")
-					shutil.copy2(absSourceFile, absDestFile)
-				else:
-					INDATED.append(file)
+				if sourceTime > destTime:
+					if outdatedGoAhead:
+						print(f"Updating: \"{file}\"")
+						COPY(absSourceFile, absDestFile)
+						continue
+					print(f"Outdated file found in destination (source: {prettySourceTime}, destination: {prettyDestTime}): \"{file}\"")
+					decision = decide("Update it?", choices=["y", "n", "d"])
+					if decision == "y":
+						COPY(absSourceFile, absDestFile)
+						print("Updated")
+					elif decision == "d":
+						outdatedGoAhead = True
+						print(f"Updating: \"{file}\"")
+						COPY(absSourceFile, absDestFile)
+					else:
+						OUTDATED.append(file)
+				elif sourceTime < destTime:
+					if indatedGoAhead:
+						print(f"Downdating: \"{file}\"")
+						COPY(absSourceFile, absDestFile)
+						continue
+					print(f"Indated file found in destination (source: {prettySourceTime}, destination: {prettyDestTime}): \"{file}\"")
+					decision = decide("Downdate it anyway?", choices=["y", "n", "d"])
+					if decision == "y":
+						COPY(absSourceFile, absDestFile)
+						print("Downdated")
+					elif decision == "d":
+						indatedGoAhead = True
+						print(f"Downdating: \"{file}\"")
+						COPY(absSourceFile, absDestFile)
+					else:
+						INDATED.append(file)
 
 	goAhead = False
 	for subdir in destSubdirs-sourceSubdirs:
@@ -214,7 +238,7 @@ def syncDirectory(path):
 			toSearch.add(subdir)
 			print("Added")
 		elif decision == "r":
-			shutil.copytree(absSourceSubdir, absDestSubdir)
+			shutil.copytree(absSourceSubdir, absDestSubdir, copy_function=COPY)
 			print("Entire tree copied")
 		else:
 			MISSING.append(subdir)
